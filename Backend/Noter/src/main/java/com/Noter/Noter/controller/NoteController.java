@@ -13,6 +13,7 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/notes")
+
 @CrossOrigin(origins = "http://localhost:5173")
 public class NoteController {
 
@@ -44,6 +45,7 @@ public class NoteController {
     }
 
     @DeleteMapping("/{id}")
+
     public ResponseEntity<Void> delete(@PathVariable Long id,
                                        @RequestHeader(value = "X-User-Email", required = false) String actorEmail,
                                        @RequestParam(value = "actorEmail", required = false) String actorEmailParam) {
@@ -52,3 +54,4 @@ public class NoteController {
         return ResponseEntity.noContent().build();
     }
 }
+
