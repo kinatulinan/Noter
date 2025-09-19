@@ -1,5 +1,6 @@
 package com.Noter.Noter.service;
 
+
 import com.Noter.Noter.entity.NoteEntity;
 import com.Noter.Noter.dto.NoteCreateRequest;
 import com.Noter.Noter.dto.NoteUpdateRequest;
@@ -11,6 +12,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
 import java.util.Locale;
+
 
 @Service
 public class NoteService {
@@ -26,6 +28,7 @@ public class NoteService {
     }
 
     public NoteResponse get(Long id) {
+
         var e = repo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Note not found: " + id));
         return toResponse(e);
@@ -42,10 +45,12 @@ public class NoteService {
         e.setAuthorEmail(email);
         e.setAuthorName(name);
         var saved = repo.save(e);
+
         return toResponse(saved);
     }
 
     public NoteResponse update(Long id, NoteUpdateRequest req) {
+
         var e = repo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Note not found: " + id));
         var actorEmail = req.actorEmail().toLowerCase(Locale.ROOT);
@@ -82,3 +87,4 @@ public class NoteService {
         );
     }
 }
+

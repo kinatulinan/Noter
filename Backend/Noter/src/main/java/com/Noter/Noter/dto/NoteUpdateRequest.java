@@ -9,3 +9,4 @@ public record NoteUpdateRequest(
         @NotBlank String content,
         @NotBlank @Email String actorEmail
 ) {}
+

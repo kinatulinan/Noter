@@ -10,3 +10,4 @@ public record NoteCreateRequest(
         @NotBlank @Email String authorEmail,
         String authorName // optional; if null we'll derive from email
 ) {}
+
