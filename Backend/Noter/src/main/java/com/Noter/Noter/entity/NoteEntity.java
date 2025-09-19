@@ -36,6 +36,16 @@ public class NoteEntity {
 
     private Instant updatedAt;
 
+    // Blockchain integration fields
+    @Column(length = 66) // Ethereum transaction hash length
+    private String blockchainTxHash;
+
+    @Column
+    private Long blockchainNoteId;
+
+    @Column
+    private Boolean isBlockchainNote = false;
+
     public NoteEntity() {}
 
 
@@ -51,4 +61,12 @@ public class NoteEntity {
     public void setAuthorName(String authorName) { this.authorName = authorName; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
+    
+    // Blockchain getters and setters
+    public String getBlockchainTxHash() { return blockchainTxHash; }
+    public void setBlockchainTxHash(String blockchainTxHash) { this.blockchainTxHash = blockchainTxHash; }
+    public Long getBlockchainNoteId() { return blockchainNoteId; }
+    public void setBlockchainNoteId(Long blockchainNoteId) { this.blockchainNoteId = blockchainNoteId; }
+    public Boolean getIsBlockchainNote() { return isBlockchainNote; }
+    public void setIsBlockchainNote(Boolean isBlockchainNote) { this.isBlockchainNote = isBlockchainNote; }
 }

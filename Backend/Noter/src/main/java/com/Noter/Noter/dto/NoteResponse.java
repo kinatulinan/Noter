@@ -9,6 +9,9 @@ public record NoteResponse(
         Instant createdAt,
         Instant updatedAt,
         String authorName,
-        String authorEmail
+        String authorEmail,
+        String blockchainTxHash,
+        Long blockchainNoteId,
+        Boolean isBlockchainNote
 ) {}
 

@@ -44,6 +44,18 @@ public class NoteService {
         e.setContent(req.content());
         e.setAuthorEmail(email);
         e.setAuthorName(name);
+        
+        // Set blockchain fields if provided
+        if (req.blockchainTxHash() != null) {
+            e.setBlockchainTxHash(req.blockchainTxHash());
+        }
+        if (req.blockchainNoteId() != null) {
+            e.setBlockchainNoteId(req.blockchainNoteId());
+        }
+        if (req.isBlockchainNote() != null) {
+            e.setIsBlockchainNote(req.isBlockchainNote());
+        }
+        
         var saved = repo.save(e);
 
         return toResponse(saved);
@@ -83,7 +95,10 @@ public class NoteService {
                 e.getCreatedAt(),
                 e.getUpdatedAt(),
                 e.getAuthorName(),
-                e.getAuthorEmail()
+                e.getAuthorEmail(),
+                e.getBlockchainTxHash(),
+                e.getBlockchainNoteId(),
+                e.getIsBlockchainNote()
         );
     }
 }
