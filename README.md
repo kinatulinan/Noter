@@ -1,0 +1,2 @@
+# Noter
+Note taking application
