@@ -1,17 +1,19 @@
 package com.Noter.Noter.controller;
 
-import com.Noter.Noter.dto.*;
+import com.Noter.Noter.dto.NoteCreateRequest;
+import com.Noter.Noter.dto.NoteResponse;
+import com.Noter.Noter.dto.NoteUpdateRequest;
+import com.Noter.Noter.service.NoteService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import com.Noter.Noter.service.NoteService;
 
 import java.net.URI;
 import java.util.List;
 
 @RestController
 @RequestMapping("/api/notes")
-@CrossOrigin // allow frontend during dev
+@CrossOrigin(origins = "http://localhost:5173")
 public class NoteController {
 
     private final NoteService service;
@@ -42,8 +44,11 @@ public class NoteController {
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<Void> delete(@PathVariable Long id) {
-        service.delete(id);
+    public ResponseEntity<Void> delete(@PathVariable Long id,
+                                       @RequestHeader(value = "X-User-Email", required = false) String actorEmail,
+                                       @RequestParam(value = "actorEmail", required = false) String actorEmailParam) {
+        var email = (actorEmail != null && !actorEmail.isBlank()) ? actorEmail : actorEmailParam;
+        service.delete(id, email);
         return ResponseEntity.noContent().build();
     }
 }
