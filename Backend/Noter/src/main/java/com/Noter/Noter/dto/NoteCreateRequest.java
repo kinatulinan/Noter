@@ -1,11 +1,23 @@
 package com.Noter.Noter.dto;
 
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Size;
 
-
-
-public record NoteCreateRequest(
-        @NotBlank @Size(max = 200) String title,
-        @NotBlank String content
-) {}
+public class NoteCreateRequest {
+    
+    @NotBlank(message = "Note text is required")
+    private String text;
+    
+    public NoteCreateRequest() {}
+    
+    public NoteCreateRequest(String text) {
+        this.text = text;
+    }
+    
+    public String getText() {
+        return text;
+    }
+    
+    public void setText(String text) {
+        this.text = text;
+    }
+}
