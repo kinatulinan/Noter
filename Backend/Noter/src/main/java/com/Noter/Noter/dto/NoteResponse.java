@@ -7,5 +7,8 @@ public record NoteResponse(
         String title,
         String content,
         Instant createdAt,
-        Instant updatedAt
+        Instant updatedAt,
+        String authorName,
+        String authorEmail
 ) {}
+
