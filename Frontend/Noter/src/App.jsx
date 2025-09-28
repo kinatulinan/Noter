@@ -103,19 +103,27 @@ function App() {
     localStorage.removeItem(WALLET_STORAGE_KEY);
   };
 
-  const loadNotes = async () => {
-    if (!walletAddress) return;
-    try {
-      setLoading(true);
-      const notesData = await api(`/api/notes/${walletAddress}`);
-      setNotes(notesData);
-    } catch (error) {
-      console.error("Error loading notes:", error);
+ const loadNotes = async () => {
+  if (!walletAddress) return;
+  try {
+    setLoading(true);
+    const notesData = await api(`/api/notes/${walletAddress}`);
+    setNotes(notesData);
+  } catch (error) {
+    console.error("Error loading notes:", error);
+
+    // Only show alert if this is NOT the first silent init
+    if (isConnected && walletAddress && notes.length > 0) {
       alert("Failed to load notes. Please try again.");
-    } finally {
-      setLoading(false);
     }
-  };
+
+    // Optional: Clear notes to avoid showing stale data
+    setNotes([]);
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   const createNote = async (e) => {
     e.preventDefault();
@@ -234,8 +242,8 @@ function App() {
         <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-6 mb-8 shadow-2xl border border-white/20">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
             <div>
-              <h1 className="text-3xl font-bold text-white mb-2">📝 Noter</h1>
-              <p className="text-gray-300">
+              <h1 className="text-3xl sm:text-4xl font-bold text-white mb-2">📝 Noter</h1>
+              <p className="text-gray-200 text-base sm:text-lg">
                 Wallet: <span className="font-mono text-blue-300">{formatAddress(walletAddress)}</span>
               </p>
             </div>
