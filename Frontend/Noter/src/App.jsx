@@ -30,10 +30,15 @@ function App() {
   const [availableAddresses, setAvailableAddresses] = useState([]);
   const [loadingAddresses, setLoadingAddresses] = useState(false);
   const [showFullAddress, setShowFullAddress] = useState(false);
+  const [walletBalance, setWalletBalance] = useState(null);
+  const [walletApi, setWalletApi] = useState(null);
+  const [showSendModal, setShowSendModal] = useState(false);
+  const [sendAddress, setSendAddress] = useState("");
+  const [sendAmount, setSendAmount] = useState("");
+  const [sending, setSending] = useState(false);
 
   useEffect(() => {
     async function init() {
-      // Check for Lace wallet with multiple possible property names
       const laceWallet = window.cardano?.lace || window.cardano?.lacewallet;
       
       if (!laceWallet) {
@@ -41,12 +46,11 @@ function App() {
         return;
       }
 
-      // Check if we have a stored address
       const storedAddress = localStorage.getItem(WALLET_STORAGE_KEY);
       if (storedAddress) {
         try {
-          // Try to verify the wallet is still connected
           const walletApi = await laceWallet.enable();
+          setWalletApi(walletApi);
           let addresses = await walletApi.getUsedAddresses();
           
           if (addresses.length === 0) {
@@ -62,7 +66,6 @@ function App() {
           
           if (addresses.length > 0) {
             const address = typeof addresses[0] === 'string' ? addresses[0] : addresses[0].toString();
-            // Check if stored address matches any current address
             const matchingAddr = addresses.find(addr => {
               const addrStr = typeof addr === 'string' ? addr : addr.toString();
               return addrStr === storedAddress;
@@ -74,7 +77,6 @@ function App() {
               setWalletAddress({ hex: hexAddr, bech32: bech32Addr });
               setIsConnected(true);
             } else {
-              // Stored address doesn't match, use first available
               const hexAddr = address;
               const bech32Addr = hexToBech32(hexAddr);
               setWalletAddress({ hex: hexAddr, bech32: bech32Addr });
@@ -84,7 +86,6 @@ function App() {
           }
         } catch (err) {
           console.error("Failed to reconnect to Lace wallet:", err);
-          // Clear stored address if wallet connection fails
           localStorage.removeItem(WALLET_STORAGE_KEY);
         }
       }
@@ -94,17 +95,68 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (walletAddress && isConnected) {
+    if (walletAddress && isConnected && walletApi) {
       loadNotes();
+      loadWalletBalance();
     }
-  }, [walletAddress, isConnected]);
+  }, [walletAddress, isConnected, walletApi]);
+
+  const loadWalletBalance = async () => {
+    if (!walletAddress || !walletApi) return;
+    
+    try {
+      const utxos = await walletApi.getUtxos();
+      console.log("UTXOs:", utxos);
+    
+      let totalLovelace = BigInt(0);
+      if (utxos && utxos.length > 0) {
+        for (const utxo of utxos) {
+          if (utxo.amount) {
+            if (Array.isArray(utxo.amount)) {
+              const adaAmount = utxo.amount.find(amt => 
+                (typeof amt === 'object' && (amt.unit === 'lovelace' || 'lovelace' in amt))
+              );
+              if (adaAmount) {
+                const lovelace = typeof adaAmount === 'object' && 'lovelace' in adaAmount 
+                  ? BigInt(adaAmount.lovelace) 
+                  : BigInt(adaAmount.quantity || adaAmount);
+                totalLovelace += lovelace;
+              }
+            } else if (typeof utxo.amount === 'object' && 'lovelace' in utxo.amount) {
+              totalLovelace += BigInt(utxo.amount.lovelace);
+            } else if (typeof utxo.amount === 'string' || typeof utxo.amount === 'number') {
+              totalLovelace += BigInt(utxo.amount);
+            }
+          }
+        }
+      }
+      
+      const adaBalance = Number(totalLovelace) / 1000000;
+      setWalletBalance(adaBalance);
+    } catch (error) {
+      console.error("Error loading wallet balance:", error);
+      if (walletApi.getBalance) {
+        try {
+          const balance = await walletApi.getBalance();
+          if (balance) {
+            const adaBalance = typeof balance === 'string' ? BigInt(balance) : BigInt(balance);
+            setWalletBalance(Number(adaBalance) / 1000000);
+          }
+        } catch (err) {
+          console.error("Error getting balance:", err);
+          setWalletBalance(0);
+        }
+      } else {
+        setWalletBalance(0);
+      }
+    }
+  };
 
   const openWalletModal = async () => {
     console.log("Connect wallet clicked");
     console.log("window.cardano:", window.cardano);
     console.log("window.cardano?.lace:", window.cardano?.lace);
     
-    // Check for Lace wallet with multiple possible property names
     const laceWallet = window.cardano?.lace || window.cardano?.lacewallet;
     
     if (!laceWallet) {
@@ -117,15 +169,13 @@ function App() {
       setLoadingAddresses(true);
       setShowWalletModal(true);
       console.log("Enabling wallet...");
-      // Request wallet connection (CIP-30 standard)
       const walletApi = await laceWallet.enable();
+      setWalletApi(walletApi);
       console.log("Wallet API enabled:", walletApi);
       console.log("Available API methods:", Object.keys(walletApi));
       
-      // Fetch ALL addresses from all available methods
       const allAddresses = [];
       
-      // Get used addresses - this should return all used addresses for the current account
       try {
         const usedAddresses = await walletApi.getUsedAddresses();
         console.log("Used addresses (count):", usedAddresses?.length);
@@ -137,7 +187,6 @@ function App() {
         console.warn("Error getting used addresses:", err);
       }
       
-      // Get unused addresses - these are addresses that haven't been used yet
       try {
         const unusedAddresses = await walletApi.getUnusedAddresses();
         console.log("Unused addresses (count):", unusedAddresses?.length);
@@ -149,7 +198,6 @@ function App() {
         console.warn("Error getting unused addresses:", err);
       }
       
-      // Get change address - this is typically the same as the first unused address
       try {
         const changeAddress = await walletApi.getChangeAddress();
         console.log("Change address:", changeAddress);
@@ -162,29 +210,22 @@ function App() {
       
       console.log("Total addresses collected (before deduplication):", allAddresses.length);
       
-      // Convert all addresses to strings, convert to bech32, and deduplicate
-      // Only include payment addresses (addr1... or addr_test1...), skip stake addresses
       const addressMap = new Map();
       allAddresses.forEach(addr => {
         const addrStr = typeof addr === 'string' ? addr : addr.toString();
         if (addrStr) {
           try {
-            // Convert hex to bech32 for display
             const bech32Addr = hexToBech32(addrStr);
             
-            // Only include payment addresses, skip stake addresses
             if (bech32Addr.startsWith('addr1') || bech32Addr.startsWith('addr_test1')) {
               if (!addressMap.has(bech32Addr)) {
-                // Store both hex (for API) and bech32 (for display)
                 addressMap.set(bech32Addr, { hex: addrStr, bech32: bech32Addr });
               }
             } else if (bech32Addr.startsWith('stake1') || bech32Addr.startsWith('stake_test1')) {
-              // Skip stake addresses - they're not payment addresses
               console.log("Skipping stake address:", bech32Addr);
             }
           } catch (err) {
             console.warn("Failed to convert address to bech32:", err);
-            // If conversion fails, check if it's already a payment address
             if (addrStr.startsWith('addr1') || addrStr.startsWith('addr_test1')) {
               if (!addressMap.has(addrStr)) {
                 addressMap.set(addrStr, { hex: addrStr, bech32: addrStr });
@@ -214,18 +255,47 @@ function App() {
   };
 
   const selectWalletAddress = (addressObj) => {
-    // addressObj contains both hex and bech32
     const addressToStore = addressObj.hex || addressObj.bech32;
     const addressToDisplay = addressObj.bech32 || addressObj.hex;
     console.log("Selected wallet address (hex):", addressToStore);
     console.log("Selected wallet address (bech32):", addressToDisplay);
-    // Store hex for API calls, but display bech32
     setWalletAddress({ hex: addressToStore, bech32: addressToDisplay });
     setIsConnected(true);
-    // Store hex in localStorage for API compatibility
     localStorage.setItem(WALLET_STORAGE_KEY, addressToStore);
     setShowWalletModal(false);
     setAvailableAddresses([]);
+    if (walletApi) {
+      loadWalletBalance();
+    }
+  };
+
+  const sendTransaction = async (e) => {
+    e.preventDefault();
+    if (!sendAddress.trim() || !sendAmount || !walletApi) {
+      alert("Please enter a valid address and amount");
+      return;
+    }
+
+    const amountLovelace = Math.floor(parseFloat(sendAmount) * 1000000);
+    if (isNaN(amountLovelace) || amountLovelace <= 0) {
+      alert("Please enter a valid amount");
+      return;
+    }
+
+    try {
+      setSending(true);
+      
+      alert("Send functionality requires full transaction building. Please use your Lace wallet directly for sending transactions.");
+      
+      setSendAddress("");
+      setSendAmount("");
+      setShowSendModal(false);
+    } catch (error) {
+      console.error("Error sending transaction:", error);
+      alert(`Failed to send transaction: ${error.message || error}`);
+    } finally {
+      setSending(false);
+    }
   };
 
   const closeWalletModal = () => {
@@ -320,10 +390,8 @@ function App() {
         headers: { "X-Wallet-Address": addressHex },
       });
       
-      // Update the UI immediately by removing the note from state
       setNotes((prevNotes) => prevNotes.filter((note) => note.id !== noteId));
       
-      // Show success message after UI update
       alert("Note deleted successfully!");
     } catch (error) {
       console.error("Error deleting note:", error);
@@ -348,17 +416,14 @@ function App() {
 
   const hexToBech32 = (hexAddress) => {
     try {
-      // If already in bech32 format (payment address), return as-is
       if (hexAddress.startsWith('addr1') || hexAddress.startsWith('addr_test1')) {
         return hexAddress;
       }
       
-      // If it's a stake address in bech32, return as-is (will be filtered out later)
       if (hexAddress.startsWith('stake1') || hexAddress.startsWith('stake_test1')) {
         return hexAddress;
       }
       
-      // Convert hex string to Uint8Array
       const hexString = hexAddress.startsWith('0x') ? hexAddress.slice(2) : hexAddress;
       const addressBytes = Uint8Array.from(
         hexString.match(/.{1,2}/g).map(byte => parseInt(byte, 16))
@@ -368,14 +433,11 @@ function App() {
         return hexAddress;
       }
       
-      // Create Cardano address from bytes using CSL
       const address = CardanoWasm.Address.from_bytes(addressBytes);
       
-      // Convert to bech32 format
       return address.to_bech32();
     } catch (error) {
       console.error("Error converting address to bech32:", error);
-      // If conversion fails, return original address
       return hexAddress;
     }
   };
@@ -530,6 +592,94 @@ function App() {
             </button>
           </div>
         </div>
+
+        {/* Transactions Section */}
+        <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-6 mb-8 shadow-2xl border border-white/20">
+          <h2 className="text-xl font-semibold text-white mb-4">Wallet</h2>
+          <div className="flex flex-col md:flex-row items-center gap-6 mb-4">
+            <div className="bg-white/5 rounded-lg p-4 w-full md:flex-grow">
+              <p className="text-gray-400 text-sm mb-1">Balance</p>
+              <p className="text-3xl font-bold text-white">
+                {walletBalance !== null ? `${walletBalance.toFixed(2)} ADA` : "Loading..."}
+              </p>
+            </div>
+            <button
+              onClick={() => setShowSendModal(true)}
+              className="w-full md:w-auto bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white font-semibold py-3 px-8 rounded-lg transition-all duration-200 text-lg"
+            >
+              Send
+            </button>
+          </div>
+        </div>
+
+        {/* Send Modal */}
+        {showSendModal && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-6 shadow-2xl border border-white/20 max-w-md w-full">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-2xl font-bold text-white">Send ADA</h2>
+                <button
+                  onClick={() => {
+                    setShowSendModal(false);
+                    setSendAddress("");
+                    setSendAmount("");
+                  }}
+                  className="text-gray-400 hover:text-white transition-colors"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <form onSubmit={sendTransaction} className="space-y-4">
+                <div>
+                  <label className="block text-gray-300 text-sm mb-2">Recipient Address</label>
+                  <input
+                    type="text"
+                    value={sendAddress}
+                    onChange={(e) => setSendAddress(e.target.value)}
+                    placeholder="addr1... or addr_test1..."
+                    className="w-full bg-white/20 border border-white/30 rounded-lg px-4 py-3 text-white placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-gray-300 text-sm mb-2">Amount (ADA)</label>
+                  <input
+                    type="number"
+                    step="0.000001"
+                    min="0"
+                    value={sendAmount}
+                    onChange={(e) => setSendAmount(e.target.value)}
+                    placeholder="0.0"
+                    className="w-full bg-white/20 border border-white/30 rounded-lg px-4 py-3 text-white placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                    required
+                  />
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    type="submit"
+                    disabled={sending}
+                    className="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-6 rounded-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {sending ? "Sending..." : "Send"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowSendModal(false);
+                      setSendAddress("");
+                      setSendAmount("");
+                    }}
+                    className="bg-gray-500 hover:bg-gray-600 text-white font-semibold py-2 px-6 rounded-lg transition-colors duration-200"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
 
         <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-6 mb-8 shadow-2xl border border-white/20">
           <h2 className="text-xl font-semibold text-white mb-4">
