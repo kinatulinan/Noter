@@ -1,12 +1,23 @@
 package com.Noter.Noter.dto;
 
-import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Size;
 
-public record NoteUpdateRequest(
-        @NotBlank @Size(max = 200) String title,
-        @NotBlank String content,
-        @NotBlank @Email String actorEmail
-) {}
-
+public class NoteUpdateRequest {
+    
+    @NotBlank(message = "Note text is required")
+    private String text;
+    
+    public NoteUpdateRequest() {}
+    
+    public NoteUpdateRequest(String text) {
+        this.text = text;
+    }
+    
+    public String getText() {
+        return text;
+    }
+    
+    public void setText(String text) {
+        this.text = text;
+    }
+}

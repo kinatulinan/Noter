@@ -3,29 +3,23 @@
 @tailwind utilities;
 
 @layer base {
+  html {
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+  
   body {
-    @apply bg-dark-900 text-gray-100 font-sans;
+    margin: 0;
+    padding: 0;
+    min-height: 100vh;
   }
 }
 
 @layer components {
-  .btn-primary {
-    @apply bg-primary-600 hover:bg-primary-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors duration-200;
+  .glass-effect {
+    @apply bg-white/10 backdrop-blur-lg border border-white/20;
   }
   
-  .btn-secondary {
-    @apply bg-gray-600 hover:bg-gray-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors duration-200;
-  }
-  
-  .btn-danger {
-    @apply bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors duration-200;
-  }
-  
-  .input-field {
-    @apply bg-dark-800 border border-gray-600 text-gray-100 rounded-lg px-3 py-2 focus:ring-2 focus:ring-primary-500 focus:border-transparent;
-  }
-  
-  .card {
-    @apply bg-dark-800 rounded-xl shadow-lg border border-gray-700;
+  .gradient-text {
+    @apply bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent;
   }
 }

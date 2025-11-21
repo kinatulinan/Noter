@@ -1,256 +1,192 @@
-# Noter — Notes App (React + Spring Boot + MySQL)
+# Noter - Blockchain-Powered Note Taking App
 
-A simple note‑taking web app with **registration + login** and **CRUD** for notes.  
-Users can see everyone’s notes, but **only the creator can edit or delete their own note**.  
-Authorization (tokens/roles) is intentionally **not** included to keep the scope small.
+A full-stack web application that allows users to create, read, update, and delete notes using their crypto wallet for authentication. Built with React, Spring Boot, and Supabase.
 
----
+## Features
 
-## ✨ Features
+- 🔐 **Wallet-based Authentication**: Connect with MetaMask or compatible wallets
+- 📝 **CRUD Operations**: Create, read, update, and delete notes
+- 🔒 **Ownership Validation**: Only note owners can modify their notes
+- 💾 **Supabase Integration**: Persistent storage in PostgreSQL
+- 🎨 **Modern UI**: Responsive design with TailwindCSS
+- ⚡ **Real-time Updates**: Immediate UI feedback
 
-- Register and login (basic, no JWT yet).
-- Create, read, update, delete notes.
-- Every note stores **who created it** (name + email).
-- UI shows the **creator’s name** on each note.
-- Only the **creator** sees **Edit**/**Delete** on their notes; others can only view.
+## Tech Stack
 
----
+### Frontend
+- React 18 with Vite
+- TailwindCSS for styling
+- Ethers.js for wallet integration
+- MetaMask wallet support
 
-## 🧱 Architecture Overview
+### Backend
+- Spring Boot 3.5.6
+- Spring Data JPA
+- PostgreSQL (via Supabase)
+- RESTful API design
 
-```
-Frontend (Vite + React)  →  REST API (Spring Boot)  →  MySQL (JPA/Hibernate)
-```
+### Database
+- Supabase PostgreSQL
+- UUID primary keys
+- Indexed wallet addresses for performance
 
-- **Frontend**: Vite + React, fetches the API at `http://localhost:8080` (configurable).
-- **Backend**: Spring Boot 3, Spring Web, Spring Data JPA, MySQL connector.
-- **Database**: MySQL (`noter_db`) with Hibernate `ddl-auto=update` for schema updates.
+## Prerequisites
 
----
+- Node.js 18+ and npm
+- Java 17+
+- Maven 3.6+
+- MetaMask browser extension
+- Supabase account
 
-## 🖥️ Frontend
+## Setup Instructions
 
-- Stack: **Vite + React**, plain fetch (or axios), single‑page UI.
-- Dev server: `http://localhost:5173`
-- **Username field** in the UI is treated as **email** to match backend inputs.
-- Notes text box maps to:
-  - `title` = first 60 chars of the text (for convenience),
-  - `content` = full text of the note.
+### 1. Database Setup
 
-### Frontend setup
-
-```bash
-cd Frontend/Noter
-npm install
-# Optional: configure API base URL
-echo "VITE_API_BASE_URL=http://localhost:8080" > .env
-npm run dev
-# open http://localhost:5173
-```
-
----
-
-## ⚙️ Backend
-
-- Stack: **Spring Boot 3.5.x**, Java 17+ (works on 22), Spring Web, Spring Data JPA, MySQL.
-- Run on port **8080**.
-
-### Key classes (simplified)
-
-**Entity**
-
-```java
-// NoteEntity
-Long id;
-String title;
-String content;
-String authorEmail; // who created it (ownership)
-String authorName;
-Instant createdAt;
-Instant updatedAt;
-```
-
-**DTOs**
-
-```java
-// NoteCreateRequest
-{ "title": "...", "content": "...", "authorEmail": "user@example.com", "authorName": "User Name" }
-
-// NoteUpdateRequest
-{ "title": "...", "content": "...", "actorEmail": "user@example.com" }
-
-// NoteResponse
-{ "id": 1, "title": "...", "content": "...", "authorName": "...", "authorEmail": "...",
-  "createdAt": "...", "updatedAt": "..." }
-```
-
-**Ownership enforcement**
-
-- Only `authorEmail` can update/delete.
-- Server throws proper HTTP errors (403/404/400) using `ResponseStatusException`.
-
-**CORS**
-
-```java
-@CrossOrigin(origins = "http://localhost:5173") // on NoteController (and/or a global CORS bean)
-```
-
-### Backend setup
-
-1. **Create database** (MySQL):
+1. Go to your Supabase project dashboard
+2. Navigate to the SQL Editor
+3. Run the following SQL script to create the notes table:
 
 ```sql
-CREATE DATABASE noter_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+-- Create the notes table in Supabase
+CREATE TABLE IF NOT EXISTS notes (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    wallet_address VARCHAR(255) NOT NULL,
+    text TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Create indexes for better performance
+CREATE INDEX IF NOT EXISTS idx_notes_wallet_address ON notes(wallet_address);
+CREATE INDEX IF NOT EXISTS idx_notes_created_at ON notes(created_at DESC);
 ```
 
-2. **Configure application properties** (`src/main/resources/application.properties`):
+### 2. Backend Setup
 
-```properties
-spring.application.name=Noter
+1. Navigate to the backend directory:
+   ```bash
+   cd Backend/Noter
+   ```
 
-spring.datasource.url=jdbc:mysql://localhost:3306/noter_db
-spring.datasource.driver-class-name=com.mysql.cj.jdbc.Driver
-spring.datasource.username=YOUR_DB_USER
-spring.datasource.password=YOUR_DB_PASSWORD
+2. Set environment variables (optional, defaults are provided):
+   ```bash
+   export SUPABASE_URL="https://jircqxgaupylcjhneinh.supabase.co"
+   export SUPABASE_USERNAME="postgres"
+   export SUPABASE_DB_PASSWORD="otenbaloten123"
+   ```
 
-spring.jpa.hibernate.ddl-auto=update
-spring.jpa.show-sql=true
+3. Build and run the Spring Boot application:
+   ```bash
+   ./mvnw spring-boot:run
+   ```
 
-# Optional
-server.error.include-stacktrace=never
-```
+   The backend will be available at `http://localhost:8080`
 
-3. **Run**:
+### 3. Frontend Setup
 
-```bash
-cd Backend/Noter
-./mvnw spring-boot:run   # or: mvn spring-boot:run
-```
+1. Navigate to the frontend directory:
+   ```bash
+   cd Frontend/Noter
+   ```
 
----
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
 
-## 🔌 REST API (Quick Reference)
+3. Start the development server:
+   ```bash
+   npm run dev
+   ```
 
-### Auth
+   The frontend will be available at `http://localhost:5173`
 
-> Minimal endpoints; no tokens. The frontend treats “username” as the email.
+## Usage
 
-**Register**
+1. **Connect Wallet**: Click "Connect Wallet" and approve the connection in MetaMask
+2. **Create Notes**: Type your note in the text area and click "Create Note"
+3. **Edit Notes**: Click the "Edit" button on any of your notes
+4. **Delete Notes**: Click the "Delete" button on any of your notes
+5. **Disconnect**: Click "Disconnect" to log out
 
-```
-POST /api/auth/register
-Content-Type: application/json
-{
-  "name": "Jane Doe",
-  "email": "jane@example.com",
-  "password": "secret123"
-}
-200 OK  →  { "id": 1, "name": "Jane Doe", "email": "jane@example.com" }
-```
+## API Endpoints
 
-**Login**
+### Notes API
 
-```
-POST /api/auth/login
-Content-Type: application/json
-{
-  "email": "jane@example.com",
-  "password": "secret123"
-}
-200 OK  →  { "success": true, "message": "Login successful", "user": { "id": 1, "name": "...", "email": "..." } }
-```
+- `POST /api/notes` - Create a new note
+  - Headers: `X-Wallet-Address: <wallet_address>`
+  - Body: `{ "text": "note content" }`
 
-### Notes
+- `GET /api/notes/{walletAddress}` - Get all notes for a wallet
+  - Returns: Array of note objects
 
-**List**
+- `PUT /api/notes/{id}` - Update a note
+  - Headers: `X-Wallet-Address: <wallet_address>`
+  - Body: `{ "text": "updated content" }`
 
-```
-GET /api/notes
-200 OK → [
-  { "id": 1, "title": "...", "content": "...", "authorName": "...", "authorEmail": "...", ... }
-]
-```
+- `DELETE /api/notes/{id}` - Delete a note
+  - Headers: `X-Wallet-Address: <wallet_address>`
 
-**Create**
+## Security Features
 
-```
-POST /api/notes
-Content-Type: application/json
-{
-  "title": "My first note",
-  "content": "Hello world",
-  "authorEmail": "jane@example.com",
-  "authorName": "Jane Doe"   // optional; server derives from email if omitted
-}
-201 Created → NoteResponse
-```
+- **Wallet-based Authentication**: No passwords required
+- **Ownership Validation**: Users can only modify their own notes
+- **CORS Protection**: Configured for local development
+- **Input Validation**: Server-side validation for all inputs
 
-**Update (author only)**
+## Project Structure
 
 ```
-PUT /api/notes/{id}
-Content-Type: application/json
-{
-  "title": "Updated title",
-  "content": "Updated content",
-  "actorEmail": "jane@example.com"
-}
-200 OK → NoteResponse
-403 FORBIDDEN if actorEmail != authorEmail
+Noter/
+├── Backend/
+│   └── Noter/
+│       ├── src/main/java/com/Noter/Noter/
+│       │   ├── controller/NoteController.java
+│       │   ├── dto/
+│       │   ├── entity/Note.java
+│       │   ├── repository/NoteRepository.java
+│       │   ├── service/NoteService.java
+│       │   └── config/CorsConfig.java
+│       └── src/main/resources/application.properties
+├── Frontend/
+│   └── Noter/
+│       ├── src/
+│       │   ├── App.jsx
+│       │   ├── main.jsx
+│       │   └── index.css
+│       └── package.json
+└── README.md
 ```
 
-**Delete (author only)**
+## Environment Variables
 
-```
-DELETE /api/notes/{id}
-Headers: X-User-Email: jane@example.com
-# or: /api/notes/{id}?actorEmail=jane@example.com
-204 No Content
-403 FORBIDDEN if actorEmail != authorEmail
-```
+### Backend (application.properties)
+- `SUPABASE_URL`: Supabase database URL
+- `SUPABASE_USERNAME`: Database username
+- `SUPABASE_DB_PASSWORD`: Database password
 
----
+## Troubleshooting
 
-## ✅ How the flow matches the requirement
+### Common Issues
 
-- When **user1** creates a note, it’s stored with `authorEmail`/`authorName`.
-- Any user can **see** the note and its **creator’s name**.
-- Only the **creator** can **edit/delete** (checked in UI _and_ enforced on the server).
+1. **Wallet Connection Failed**
+   - Ensure MetaMask is installed and unlocked
+   - Check if the site is allowed to connect to MetaMask
 
----
+2. **Backend Connection Error**
+   - Verify the backend is running on port 8080
+   - Check Supabase credentials in application.properties
 
-## 🧪 Testing tips
+3. **CORS Errors**
+   - Ensure the frontend is running on localhost:5173
+   - Check CORS configuration in CorsConfig.java
 
-- Use **Postman** or the browser console to verify endpoints.
-- Common checks:
-  - Create a note as `user1@example.com` → confirm it shows `authorName` on list.
-  - Login as `user2@example.com` → cannot edit/delete `user1`’s note; gets 403 from API.
+### Development Tips
 
----
+- Use browser developer tools to debug wallet connections
+- Check the browser console for API errors
+- Monitor the Spring Boot console for backend logs
+- Use Supabase dashboard to verify data persistence
 
-## 🛠️ Troubleshooting
+## License
 
-- **Unknown database 'noter_db'**: Create it first (`CREATE DATABASE noter_db;`) and ensure the JDBC URL points to it.
-- **Cannot load driver class: com.mysql.cj.jdbc.Driver**: Ensure `mysql-connector-j` is on the classpath (it is in `pom.xml`).
-- **NPE on email**: The register/login JSON must include the `email` key; add validation (`@Valid`) on DTOs.
-- **CORS**: If the browser blocks requests, confirm `@CrossOrigin` or a global CORS config allows `http://localhost:5173`.
-
----
-
-## 📦 Tech Stack
-
-- **Frontend**: React (Vite), CSS
-- **Backend**: Spring Boot 3, Spring Web, Spring Data JPA
-- **Database**: MySQL 8+
-- **Build Tools**: Maven
-- **Java**: 17+
-
----
-
-## 🚀 Roadmap (nice-to-have)
-
-- JWT auth (Spring Security) to remove the need to pass emails in requests.
-- Per-user note visibility (if required) or personal feeds.
-- Pagination & search.
-- Better error messages and form validation on the frontend.
-- Docker Compose for one‑command local setup.
+This project is for educational purposes. Feel free to use and modify as needed.

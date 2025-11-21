@@ -1,393 +1,768 @@
 import { useState, useEffect } from "react";
-import WalletConnection from "./components/WalletConnection";
-import BlockchainNoteForm from "./components/BlockchainNoteForm";
+import * as CardanoWasm from '@emurgo/cardano-serialization-lib-browser';
 
-const API = import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
+const API_BASE_URL = "http://localhost:8080";
+const WALLET_STORAGE_KEY = "noter_wallet_address";
 
-async function api(path, { method = "GET", body, headers } = {}) {
-  const res = await fetch(`${API}${path}`, {
+async function api(path, { method = "GET", body, headers = {} } = {}) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
     method,
-    headers: { "Content-Type": "application/json", ...(headers || {}) },
+    headers: { "Content-Type": "application/json", ...headers },
     body: body ? JSON.stringify(body) : undefined,
   });
-  let data = null;
-  try {
-    data = await res.json();
-  } catch {
-    /* empty or non-json */
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
   }
-  if (!res.ok) {
-    const msg =
-      data?.message ||
-      data?.error ||
-      (typeof data === "string" ? data : res.statusText);
-    throw new Error(msg);
-  }
-  return data;
+
+  return response.json();
 }
 
 function App() {
-  const [currentUser, setCurrentUser] = useState(null);
-  const [currentUserEmail, setCurrentUserEmail] = useState(null);
-  const [notes, setNotes] = useState([]);
-  const [form, setForm] = useState({ username: "", password: "" });
-  const [authMode, setAuthMode] = useState("login");
-  const [input, setInput] = useState("");
-  const [editIndex, setEditIndex] = useState(null);
-  const [isWalletConnected, setIsWalletConnected] = useState(false);
   const [walletAddress, setWalletAddress] = useState(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [notes, setNotes] = useState([]);
+  const [newNote, setNewNote] = useState("");
+  const [editingNote, setEditingNote] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [showWalletModal, setShowWalletModal] = useState(false);
+  const [availableAddresses, setAvailableAddresses] = useState([]);
+  const [loadingAddresses, setLoadingAddresses] = useState(false);
+  const [showFullAddress, setShowFullAddress] = useState(false);
+  const [walletBalance, setWalletBalance] = useState(null);
+  const [walletApi, setWalletApi] = useState(null);
+  const [showSendModal, setShowSendModal] = useState(false);
+  const [sendAddress, setSendAddress] = useState("");
+  const [sendAmount, setSendAmount] = useState("");
+  const [sending, setSending] = useState(false);
 
   useEffect(() => {
-    if (currentUserEmail) loadNotes();
-  }, [currentUserEmail]);
+    async function init() {
+      const laceWallet = window.cardano?.lace || window.cardano?.lacewallet;
+      
+      if (!laceWallet) {
+        console.log("Lace wallet not detected on page load");
+        return;
+      }
+
+      const storedAddress = localStorage.getItem(WALLET_STORAGE_KEY);
+      if (storedAddress) {
+        try {
+          const walletApi = await laceWallet.enable();
+          setWalletApi(walletApi);
+          let addresses = await walletApi.getUsedAddresses();
+          
+          if (addresses.length === 0) {
+            addresses = await walletApi.getUnusedAddresses();
+          }
+          
+          if (addresses.length === 0) {
+            const changeAddress = await walletApi.getChangeAddress();
+            if (changeAddress) {
+              addresses = [changeAddress];
+            }
+          }
+          
+          if (addresses.length > 0) {
+            const address = typeof addresses[0] === 'string' ? addresses[0] : addresses[0].toString();
+            const matchingAddr = addresses.find(addr => {
+              const addrStr = typeof addr === 'string' ? addr : addr.toString();
+              return addrStr === storedAddress;
+            });
+            
+            if (matchingAddr) {
+              const hexAddr = typeof matchingAddr === 'string' ? matchingAddr : matchingAddr.toString();
+              const bech32Addr = hexToBech32(hexAddr);
+              setWalletAddress({ hex: hexAddr, bech32: bech32Addr });
+              setIsConnected(true);
+            } else {
+              const hexAddr = address;
+              const bech32Addr = hexToBech32(hexAddr);
+              setWalletAddress({ hex: hexAddr, bech32: bech32Addr });
+              setIsConnected(true);
+              localStorage.setItem(WALLET_STORAGE_KEY, hexAddr);
+            }
+          }
+        } catch (err) {
+          console.error("Failed to reconnect to Lace wallet:", err);
+          localStorage.removeItem(WALLET_STORAGE_KEY);
+        }
+      }
+    }
+
+    init();
+  }, []);
+
+  useEffect(() => {
+    if (walletAddress && isConnected && walletApi) {
+      loadNotes();
+      loadWalletBalance();
+    }
+  }, [walletAddress, isConnected, walletApi]);
+
+  const loadWalletBalance = async () => {
+    if (!walletAddress || !walletApi) return;
+    
+    try {
+      const utxos = await walletApi.getUtxos();
+      console.log("UTXOs:", utxos);
+    
+      let totalLovelace = BigInt(0);
+      if (utxos && utxos.length > 0) {
+        for (const utxo of utxos) {
+          if (utxo.amount) {
+            if (Array.isArray(utxo.amount)) {
+              const adaAmount = utxo.amount.find(amt => 
+                (typeof amt === 'object' && (amt.unit === 'lovelace' || 'lovelace' in amt))
+              );
+              if (adaAmount) {
+                const lovelace = typeof adaAmount === 'object' && 'lovelace' in adaAmount 
+                  ? BigInt(adaAmount.lovelace) 
+                  : BigInt(adaAmount.quantity || adaAmount);
+                totalLovelace += lovelace;
+              }
+            } else if (typeof utxo.amount === 'object' && 'lovelace' in utxo.amount) {
+              totalLovelace += BigInt(utxo.amount.lovelace);
+            } else if (typeof utxo.amount === 'string' || typeof utxo.amount === 'number') {
+              totalLovelace += BigInt(utxo.amount);
+            }
+          }
+        }
+      }
+      
+      const adaBalance = Number(totalLovelace) / 1000000;
+      setWalletBalance(adaBalance);
+    } catch (error) {
+      console.error("Error loading wallet balance:", error);
+      if (walletApi.getBalance) {
+        try {
+          const balance = await walletApi.getBalance();
+          if (balance) {
+            const adaBalance = typeof balance === 'string' ? BigInt(balance) : BigInt(balance);
+            setWalletBalance(Number(adaBalance) / 1000000);
+          }
+        } catch (err) {
+          console.error("Error getting balance:", err);
+          setWalletBalance(0);
+        }
+      } else {
+        setWalletBalance(0);
+      }
+    }
+  };
+
+  const openWalletModal = async () => {
+    console.log("Connect wallet clicked");
+    console.log("window.cardano:", window.cardano);
+    console.log("window.cardano?.lace:", window.cardano?.lace);
+    
+    const laceWallet = window.cardano?.lace || window.cardano?.lacewallet;
+    
+    if (!laceWallet) {
+      console.error("Lace wallet not found. Available wallets:", Object.keys(window.cardano || {}));
+      alert("Lace wallet is not installed. Please install Lace to use this app.");
+      return;
+    }
+
+    try {
+      setLoadingAddresses(true);
+      setShowWalletModal(true);
+      console.log("Enabling wallet...");
+      const walletApi = await laceWallet.enable();
+      setWalletApi(walletApi);
+      console.log("Wallet API enabled:", walletApi);
+      console.log("Available API methods:", Object.keys(walletApi));
+      
+      const allAddresses = [];
+      
+      try {
+        const usedAddresses = await walletApi.getUsedAddresses();
+        console.log("Used addresses (count):", usedAddresses?.length);
+        console.log("Used addresses (raw):", usedAddresses);
+        if (usedAddresses && usedAddresses.length > 0) {
+          allAddresses.push(...usedAddresses);
+        }
+      } catch (err) {
+        console.warn("Error getting used addresses:", err);
+      }
+      
+      try {
+        const unusedAddresses = await walletApi.getUnusedAddresses();
+        console.log("Unused addresses (count):", unusedAddresses?.length);
+        console.log("Unused addresses (raw):", unusedAddresses);
+        if (unusedAddresses && unusedAddresses.length > 0) {
+          allAddresses.push(...unusedAddresses);
+        }
+      } catch (err) {
+        console.warn("Error getting unused addresses:", err);
+      }
+      
+      try {
+        const changeAddress = await walletApi.getChangeAddress();
+        console.log("Change address:", changeAddress);
+        if (changeAddress) {
+          allAddresses.push(changeAddress);
+        }
+      } catch (err) {
+        console.warn("Error getting change address:", err);
+      }
+      
+      console.log("Total addresses collected (before deduplication):", allAddresses.length);
+      
+      const addressMap = new Map();
+      allAddresses.forEach(addr => {
+        const addrStr = typeof addr === 'string' ? addr : addr.toString();
+        if (addrStr) {
+          try {
+            const bech32Addr = hexToBech32(addrStr);
+            
+            if (bech32Addr.startsWith('addr1') || bech32Addr.startsWith('addr_test1')) {
+              if (!addressMap.has(bech32Addr)) {
+                addressMap.set(bech32Addr, { hex: addrStr, bech32: bech32Addr });
+              }
+            } else if (bech32Addr.startsWith('stake1') || bech32Addr.startsWith('stake_test1')) {
+              console.log("Skipping stake address:", bech32Addr);
+            }
+          } catch (err) {
+            console.warn("Failed to convert address to bech32:", err);
+            if (addrStr.startsWith('addr1') || addrStr.startsWith('addr_test1')) {
+              if (!addressMap.has(addrStr)) {
+                addressMap.set(addrStr, { hex: addrStr, bech32: addrStr });
+              }
+            }
+          }
+        }
+      });
+      
+      const uniqueAddresses = Array.from(addressMap.values());
+      console.log("All unique addresses (bech32):", uniqueAddresses.map(a => a.bech32));
+      
+      setAvailableAddresses(uniqueAddresses);
+      
+      if (uniqueAddresses.length === 0) {
+        alert("No addresses found in wallet. Please ensure your wallet has addresses.");
+        setShowWalletModal(false);
+      }
+    } catch (err) {
+      console.error("Wallet connection error:", err);
+      const errorMessage = err.message || err.toString() || "Unknown error";
+      alert(`Connection failed: ${errorMessage}. Please check your wallet and try again.`);
+      setShowWalletModal(false);
+    } finally {
+      setLoadingAddresses(false);
+    }
+  };
+
+  const selectWalletAddress = (addressObj) => {
+    const addressToStore = addressObj.hex || addressObj.bech32;
+    const addressToDisplay = addressObj.bech32 || addressObj.hex;
+    console.log("Selected wallet address (hex):", addressToStore);
+    console.log("Selected wallet address (bech32):", addressToDisplay);
+    setWalletAddress({ hex: addressToStore, bech32: addressToDisplay });
+    setIsConnected(true);
+    localStorage.setItem(WALLET_STORAGE_KEY, addressToStore);
+    setShowWalletModal(false);
+    setAvailableAddresses([]);
+    if (walletApi) {
+      loadWalletBalance();
+    }
+  };
+
+  const sendTransaction = async (e) => {
+    e.preventDefault();
+    if (!sendAddress.trim() || !sendAmount || !walletApi) {
+      alert("Please enter a valid address and amount");
+      return;
+    }
+
+    const amountLovelace = Math.floor(parseFloat(sendAmount) * 1000000);
+    if (isNaN(amountLovelace) || amountLovelace <= 0) {
+      alert("Please enter a valid amount");
+      return;
+    }
+
+    try {
+      setSending(true);
+      
+      alert("Send functionality requires full transaction building. Please use your Lace wallet directly for sending transactions.");
+      
+      setSendAddress("");
+      setSendAmount("");
+      setShowSendModal(false);
+    } catch (error) {
+      console.error("Error sending transaction:", error);
+      alert(`Failed to send transaction: ${error.message || error}`);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const closeWalletModal = () => {
+    setShowWalletModal(false);
+    setAvailableAddresses([]);
+    setLoadingAddresses(false);
+  };
+
+  const disconnectWallet = () => {
+    setWalletAddress(null);
+    setIsConnected(false);
+    setNotes([]);
+    setNewNote("");
+    setEditingNote(null);
+    setLoading(false);
+    localStorage.removeItem(WALLET_STORAGE_KEY);
+  };
 
   const loadNotes = async () => {
+    if (!walletAddress) return;
+    const addressHex = typeof walletAddress === 'string' ? walletAddress : walletAddress.hex;
+    if (!addressHex) return;
     try {
-      const list = await api("/api/notes");
-      const mapped = (list || []).map((n) => {
-        const authorName = n.authorName || n.authorEmail || "unknown";
-        const mine =
-          currentUserEmail &&
-          n.authorEmail &&
-          n.authorEmail.toLowerCase() === currentUserEmail.toLowerCase();
-        return {
-          id: n.id,
-          text: n.content || n.title || "",
-          owner: mine ? currentUser || authorName : authorName,
-          isBlockchain: n.blockchainTxHash ? true : false,
-          txHash: n.blockchainTxHash || null,
-        };
-      });
-      setNotes(mapped);
-    } catch (e) {
-      console.error(e);
-      alert(`Failed to load notes: ${e.message}`);
+      setLoading(true);
+      const notesData = await api(`/api/notes/${addressHex}`);
+      setNotes(notesData);
+    } catch (error) {
+      console.error("Error loading notes:", error);
+      alert("Failed to load notes. Please try again.");
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleRegister = async (e) => {
+  const createNote = async (e) => {
     e.preventDefault();
-    if (!form.username || !form.password) return alert("Fill all fields");
+    if (!newNote.trim() || !walletAddress) return;
+    const addressHex = typeof walletAddress === 'string' ? walletAddress : walletAddress.hex;
+    if (!addressHex) return;
+
     try {
-      await api("/api/auth/register", {
+      setLoading(true);
+      const noteData = await api("/api/notes", {
         method: "POST",
-        body: {
-          name: form.username,
-          email: form.username,
-          password: form.password,
-        },
+        body: { text: newNote.trim() },
+        headers: { "X-Wallet-Address": addressHex },
       });
-      alert("Registered successfully! Please login.");
-      setForm({ username: "", password: "" });
-      setAuthMode("login");
-    } catch (err) {
-      alert(err.message || "Registration failed");
+      setNotes([noteData, ...notes]);
+      setNewNote("");
+    } catch (error) {
+      console.error("Error creating note:", error);
+      alert("Failed to create note. Please try again.");
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleLogin = async (e) => {
+  const updateNote = async (e) => {
     e.preventDefault();
-    const { username, password } = form;
-    if (!username || !password) return alert("Fill all fields");
+    if (!editingNote || !newNote.trim() || !walletAddress) return;
+    const addressHex = typeof walletAddress === 'string' ? walletAddress : walletAddress.hex;
+    if (!addressHex) return;
+
     try {
-      const data = await api("/api/auth/login", {
-        method: "POST",
-        body: { email: username, password },
+      setLoading(true);
+      const updatedNote = await api(`/api/notes/${editingNote.id}`, {
+        method: "PUT",
+        body: { text: newNote.trim() },
+        headers: { "X-Wallet-Address": addressHex },
       });
-      if (!data?.success)
-        return alert(data?.message || "Invalid username or password");
-      const label = data.user?.name || data.user?.email || username;
-      setCurrentUser(label);
-      setCurrentUserEmail(data.user?.email || username);
-      setForm({ username: "", password: "" });
-      loadNotes();
-    } catch (err) {
-      alert(err.message || "Login failed");
+      setNotes(notes.map((note) => (note.id === editingNote.id ? updatedNote : note)));
+      setEditingNote(null);
+      setNewNote("");
+    } catch (error) {
+      console.error("Error updating note:", error);
+      alert("Failed to update note. Please try again.");
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleNote = async (e) => {
-    e.preventDefault();
-    if (!input.trim()) return;
-
-    const title = input.length > 60 ? input.slice(0, 60) : input || "Note";
-    const content = input;
-
+  const deleteNote = async (noteId) => {
+    if (!walletAddress) return;
+    const addressHex = typeof walletAddress === 'string' ? walletAddress : walletAddress.hex;
+    if (!addressHex) return;
+    if (!confirm("Are you sure you want to delete this note?")) return;
+  
     try {
-      if (editIndex !== null) {
-        if (notes[editIndex].owner !== currentUser)
-          return alert("You can only edit your own notes!");
-        const id = notes[editIndex].id;
-        if (id) {
-          await api(`/api/notes/${id}`, {
-            method: "PUT",
-            body: { title, content, actorEmail: currentUserEmail },
-          });
-        }
-        const updated = [...notes];
-        updated[editIndex].text = content;
-        setNotes(updated);
-        setEditIndex(null);
-      } else {
-        const created = await api("/api/notes", {
-          method: "POST",
-          body: { title, content, authorEmail: currentUserEmail },
-        });
-        setNotes([
-          ...notes,
-          { id: created?.id, text: content, owner: currentUser, isBlockchain: false },
-        ]);
-      }
-      setInput("");
-    } catch (err) {
-      alert(err.message || "Save failed");
+      setLoading(true);
+      await api(`/api/notes/${noteId}`, {
+        method: "DELETE",
+        headers: { "X-Wallet-Address": addressHex },
+      });
+      
+      setNotes((prevNotes) => prevNotes.filter((note) => note.id !== noteId));
+      
+      alert("Note deleted successfully!");
+    } catch (error) {
+      console.error("Error deleting note:", error);
+      alert("Failed to delete note. Please try again.");
+    } finally {
+      setLoading(false);
     }
   };
+  
+  const startEdit = (note) => {
+    setEditingNote(note);
+    setNewNote(note.text);
+  };
 
-  const handleDelete = async (i) => {
-    if (notes[i].owner !== currentUser)
-      return alert("You can only delete your own notes!");
+  const cancelEdit = () => {
+    setEditingNote(null);
+    setNewNote("");
+  };
+
+  const formatAddress = (address) => `${address.slice(0, 6)}...${address.slice(-4)}`;
+  const formatDate = (dateString) => dateString || "-";
+
+  const hexToBech32 = (hexAddress) => {
     try {
-      const id = notes[i].id;
-      if (id) {
-        await fetch(`${API}/api/notes/${id}`, {
-          method: "DELETE",
-          headers: {
-            "Content-Type": "application/json",
-            "X-User-Email": currentUserEmail || "",
-          },
-        }).then(async (r) => {
-          if (!r.ok) {
-            const t = await r.text().catch(() => "");
-            throw new Error(t || r.statusText);
-          }
-        });
+      if (hexAddress.startsWith('addr1') || hexAddress.startsWith('addr_test1')) {
+        return hexAddress;
       }
-      setNotes(notes.filter((_, idx) => idx !== i));
-    } catch (err) {
-      alert(err.message || "Delete failed");
+      
+      if (hexAddress.startsWith('stake1') || hexAddress.startsWith('stake_test1')) {
+        return hexAddress;
+      }
+      
+      const hexString = hexAddress.startsWith('0x') ? hexAddress.slice(2) : hexAddress;
+      const addressBytes = Uint8Array.from(
+        hexString.match(/.{1,2}/g).map(byte => parseInt(byte, 16))
+      );
+      
+      if (addressBytes.length === 0) {
+        return hexAddress;
+      }
+      
+      const address = CardanoWasm.Address.from_bytes(addressBytes);
+      
+      return address.to_bech32();
+    } catch (error) {
+      console.error("Error converting address to bech32:", error);
+      return hexAddress;
     }
   };
 
-  const handleEdit = (i) => {
-    if (notes[i].owner !== currentUser)
-      return alert("You can only edit your own notes!");
-    setInput(notes[i].text);
-    setEditIndex(i);
+  const copyToClipboard = (text) => {
+    navigator.clipboard.writeText(text).then(() => {
+      alert("Address copied to clipboard!");
+    }).catch(err => {
+      console.error("Failed to copy:", err);
+      alert("Failed to copy address");
+    });
   };
 
-  const handleWalletConnection = (connected, address) => {
-    setIsWalletConnected(connected);
-    setWalletAddress(address);
-  };
 
-  const handleBlockchainNoteStored = (result) => {
-    // Add blockchain note to local state for immediate feedback
-    const newNote = {
-      id: `blockchain-${result.noteId}`,
-      text: `Blockchain Note (ID: ${result.noteId})`,
-      owner: currentUser,
-      isBlockchain: true,
-      txHash: result.transactionHash,
-    };
-    setNotes([newNote, ...notes]);
-  };
-
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-dark-900 via-dark-800 to-gray-900">
-      <div className="container mx-auto px-4 py-8">
-        {!currentUser ? (
-          <div className="max-w-md mx-auto">
-            <div className="card p-8">
-              <div className="text-center mb-8">
-                <h1 className="text-3xl font-bold text-white mb-2">
-                  📝 Noter 2.0
-                </h1>
-                <p className="text-gray-400">Blockchain-powered note taking</p>
-              </div>
-              
-              <form onSubmit={authMode === "login" ? handleLogin : handleRegister} className="space-y-4">
-                <div>
-                  <label htmlFor="username" className="block text-sm font-medium text-gray-300 mb-2">
-                    Username
-                  </label>
-                  <input
-                    id="username"
-                    type="text"
-                    placeholder="Enter username"
-                    value={form.username}
-                    onChange={(e) => setForm({ ...form, username: e.target.value })}
-                    className="input-field w-full"
-                  />
+  if (!isConnected) {
+    return (
+      <>
+        <div className="min-h-screen bg-gradient-to-br from-blue-900 via-purple-900 to-indigo-900 flex items-center justify-center">
+          <div className="max-w-md w-full mx-4">
+            <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-8 shadow-2xl border border-white/20">
+              <div className="text-center">
+                <div className="w-16 h-16 bg-gradient-to-r from-blue-400 to-purple-400 rounded-full flex items-center justify-center mx-auto mb-6">
+                  <span className="text-2xl">📝</span>
                 </div>
-                
-                <div>
-                  <label htmlFor="password" className="block text-sm font-medium text-gray-300 mb-2">
-                    Password
-                  </label>
-                  <input
-                    id="password"
-                    type="password"
-                    placeholder="Enter password"
-                    value={form.password}
-                    onChange={(e) => setForm({ ...form, password: e.target.value })}
-                    className="input-field w-full"
-                  />
-                </div>
-                
-                <button type="submit" className="btn-primary w-full">
-                  {authMode === "login" ? "Login" : "Register"}
+                <h1 className="text-3xl font-bold text-white mb-2">Noter</h1>
+                <p className="text-gray-300 mb-8">
+                  Connect your wallet to start taking notes
+                </p>
+                <button
+                  onClick={openWalletModal}
+                  disabled={loadingAddresses}
+                  className="w-full bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white font-semibold py-3 px-6 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {loadingAddresses ? "Loading..." : "Connect Wallet"}
                 </button>
-              </form>
-              
-              <div className="mt-6 text-center">
-                <p className="text-gray-400 text-sm">
-                  {authMode === "login" ? "Don't have an account?" : "Already have an account?"}{" "}
-                  <button
-                    type="button"
-                    onClick={() => setAuthMode(authMode === "login" ? "register" : "login")}
-                    className="text-primary-400 hover:text-primary-300 font-medium"
-                  >
-                    {authMode === "login" ? "Register" : "Login"}
-                  </button>
+                <p className="text-sm text-gray-400 mt-4">
+                  You'll need Lace or a compatible Cardano wallet
                 </p>
               </div>
             </div>
           </div>
-        ) : (
-          <div className="max-w-4xl mx-auto">
-            {/* Header */}
-            <div className="card p-6 mb-8">
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                <div>
-                  <h1 className="text-3xl font-bold text-white mb-2">
-                    📝 Noter 2.0
-                  </h1>
-                  <p className="text-gray-400">
-                    Welcome back, <span className="text-white font-medium">{currentUser}</span>
-                  </p>
-                </div>
-                
-                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
-                  <WalletConnection onConnectionChange={handleWalletConnection} />
-                  <button
-                    onClick={() => {
-                      setCurrentUser(null);
-                      setCurrentUserEmail(null);
-                      setIsWalletConnected(false);
-                      setWalletAddress(null);
-                    }}
-                    className="btn-danger"
-                  >
-                    Logout
-                  </button>
-                </div>
-              </div>
-            </div>
+        </div>
 
-            {/* Blockchain Note Form */}
-            <BlockchainNoteForm 
-              onNoteStored={handleBlockchainNoteStored}
-              isWalletConnected={isWalletConnected}
-            />
-
-            {/* Traditional Note Form */}
-            <div className="card p-6 mb-8">
-              <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
-                <svg className="w-6 h-6 text-green-400" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M4 4a2 2 0 012-2h8a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 0v12h8V4H6z" clipRule="evenodd" />
-                </svg>
-                Traditional Note (Database)
-              </h3>
-              
-              <form onSubmit={handleNote} className="flex gap-3">
-                <input
-                  type="text"
-                  placeholder="Write your note..."
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  className="input-field flex-1"
-                />
-                <button type="submit" className="btn-primary">
-                  {editIndex !== null ? "Update" : "Add"}
-                </button>
-              </form>
-            </div>
-
-            {/* Notes List */}
-            <div className="card p-6">
-              <h3 className="text-xl font-semibold mb-4">Your Notes</h3>
-              
-              {notes.length === 0 ? (
-                <div className="text-center py-8 text-gray-400">
-                  <svg className="w-16 h-16 mx-auto mb-4 opacity-50" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M4 4a2 2 0 012-2h8a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 0v12h8V4H6z" clipRule="evenodd" />
+        {/* Wallet Selection Modal */}
+        {showWalletModal && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-6 shadow-2xl border border-white/20 max-w-md w-full">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-2xl font-bold text-white">Select Wallet Address</h2>
+                <button
+                  onClick={closeWalletModal}
+                  className="text-gray-400 hover:text-white transition-colors"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
-                  <p>No notes yet. Create your first note above!</p>
+                </button>
+              </div>
+              
+              {loadingAddresses ? (
+                <div className="text-center py-8">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto mb-4"></div>
+                  <p className="text-gray-300">Loading wallet addresses...</p>
+                </div>
+              ) : availableAddresses.length > 0 ? (
+                <div>
+                  <div className="space-y-3 max-h-96 overflow-y-auto">
+                    {availableAddresses.map((addressObj, index) => (
+                      <div
+                        key={index}
+                        className="w-full bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg p-4 transition-all duration-200"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-white font-mono text-xs mb-1">
+                              {formatAddress(addressObj.bech32)}
+                            </p>
+                            <p className="text-gray-400 text-xs">
+                              Address {index + 1}
+                            </p>
+                          </div>
+                          <div className="flex gap-2 flex-shrink-0">
+                            <button
+                              onClick={() => copyToClipboard(addressObj.bech32)}
+                              className="text-blue-400 hover:text-blue-300 text-xs px-2 py-1 rounded bg-white/5 hover:bg-white/10 transition-colors"
+                              title="Copy full address"
+                            >
+                              Copy
+                            </button>
+                            <button
+                              onClick={() => selectWalletAddress(addressObj)}
+                              className="bg-blue-500 hover:bg-blue-600 text-white text-xs font-semibold px-3 py-1 rounded transition-colors"
+                            >
+                              Select
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ) : (
-                <div className="space-y-3">
-                  {notes.map((note, i) => (
-                    <div
-                      key={note.id ?? i}
-                      className={`p-4 rounded-lg border-l-4 ${
-                        note.isBlockchain 
-                          ? 'bg-blue-900 bg-opacity-20 border-blue-400' 
-                          : 'bg-gray-800 border-green-400'
-                      }`}
-                    >
-                      <div className="flex justify-between items-start gap-4">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-2">
-                            <span className="font-medium text-white">{note.owner}</span>
-                            {note.isBlockchain ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-600 text-white text-xs rounded-full">
-                                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                                  <path fillRule="evenodd" d="M4 4a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2H4zm2 6a2 2 0 114 0 2 2 0 01-4 0zm6 0a2 2 0 114 0 2 2 0 01-4 0z" clipRule="evenodd" />
-                                </svg>
-                                Blockchain
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-600 text-white text-xs rounded-full">
-                                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                                  <path fillRule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z" clipRule="evenodd" />
-                                </svg>
-                                Database
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-gray-300">{note.text}</p>
-                          {note.txHash && (
-                            <p className="text-xs text-blue-400 mt-2 font-mono">
-                              TX: {note.txHash.slice(0, 20)}...
-                            </p>
-                          )}
-                        </div>
-                        
-                        {note.owner === currentUser && !note.isBlockchain && (
-                          <div className="flex gap-2">
-                            <button
-                              onClick={() => handleEdit(i)}
-                              className="btn-secondary text-sm"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              onClick={() => handleDelete(i)}
-                              className="btn-danger text-sm"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
+                <div className="text-center py-8">
+                  <p className="text-gray-300">No addresses found in wallet.</p>
                 </div>
               )}
             </div>
           </div>
         )}
+      </>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-900 via-purple-900 to-indigo-900">
+      <div className="container mx-auto px-4 py-8">
+        <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-6 mb-8 shadow-2xl border border-white/20">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <div className="flex-1">
+              <h1 className="text-3xl font-bold text-white mb-2">📝 Noter</h1>
+              <div className="flex items-center gap-2 flex-wrap">
+                <p className="text-gray-300">
+                  Wallet: 
+                </p>
+                <span className="font-mono text-blue-300 text-sm">
+                  {walletAddress && (showFullAddress 
+                    ? (typeof walletAddress === 'string' ? walletAddress : walletAddress.bech32)
+                    : formatAddress(typeof walletAddress === 'string' ? walletAddress : walletAddress.bech32)
+                  )}
+                </span>
+                <button
+                  onClick={() => setShowFullAddress(!showFullAddress)}
+                  className="text-blue-400 hover:text-blue-300 text-xs underline"
+                  title={showFullAddress ? "Show shortened" : "Show full address"}
+                >
+                  {showFullAddress ? "Shorten" : "Show Full"}
+                </button>
+                <button
+                  onClick={() => copyToClipboard(typeof walletAddress === 'string' ? walletAddress : walletAddress.bech32)}
+                  className="text-blue-400 hover:text-blue-300 text-xs underline"
+                  title="Copy full address"
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+            <button
+              onClick={disconnectWallet}
+              className="bg-red-500 hover:bg-red-600 text-white font-semibold py-2 px-4 rounded-lg transition-colors duration-200"
+            >
+              Disconnect
+            </button>
+          </div>
+        </div>
+
+        {/* Transactions Section */}
+        <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-6 mb-8 shadow-2xl border border-white/20">
+          <h2 className="text-xl font-semibold text-white mb-4">Wallet</h2>
+          <div className="flex flex-col md:flex-row items-center gap-6 mb-4">
+            <div className="bg-white/5 rounded-lg p-4 w-full md:flex-grow">
+              <p className="text-gray-400 text-sm mb-1">Balance</p>
+              <p className="text-3xl font-bold text-white">
+                {walletBalance !== null ? `${walletBalance.toFixed(2)} ADA` : "Loading..."}
+              </p>
+            </div>
+            <button
+              onClick={() => setShowSendModal(true)}
+              className="w-full md:w-auto bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white font-semibold py-3 px-8 rounded-lg transition-all duration-200 text-lg"
+            >
+              Send
+            </button>
+          </div>
+        </div>
+
+        {/* Send Modal */}
+        {showSendModal && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-6 shadow-2xl border border-white/20 max-w-md w-full">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-2xl font-bold text-white">Send ADA</h2>
+                <button
+                  onClick={() => {
+                    setShowSendModal(false);
+                    setSendAddress("");
+                    setSendAmount("");
+                  }}
+                  className="text-gray-400 hover:text-white transition-colors"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <form onSubmit={sendTransaction} className="space-y-4">
+                <div>
+                  <label className="block text-gray-300 text-sm mb-2">Recipient Address</label>
+                  <input
+                    type="text"
+                    value={sendAddress}
+                    onChange={(e) => setSendAddress(e.target.value)}
+                    placeholder="addr1... or addr_test1..."
+                    className="w-full bg-white/20 border border-white/30 rounded-lg px-4 py-3 text-white placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-gray-300 text-sm mb-2">Amount (ADA)</label>
+                  <input
+                    type="number"
+                    step="0.000001"
+                    min="0"
+                    value={sendAmount}
+                    onChange={(e) => setSendAmount(e.target.value)}
+                    placeholder="0.0"
+                    className="w-full bg-white/20 border border-white/30 rounded-lg px-4 py-3 text-white placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                    required
+                  />
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    type="submit"
+                    disabled={sending}
+                    className="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-6 rounded-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {sending ? "Sending..." : "Send"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowSendModal(false);
+                      setSendAddress("");
+                      setSendAmount("");
+                    }}
+                    className="bg-gray-500 hover:bg-gray-600 text-white font-semibold py-2 px-6 rounded-lg transition-colors duration-200"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-6 mb-8 shadow-2xl border border-white/20">
+          <h2 className="text-xl font-semibold text-white mb-4">
+            {editingNote ? "Edit Note" : "Create New Note"}
+          </h2>
+          <form onSubmit={editingNote ? updateNote : createNote} className="space-y-4">
+            <textarea
+              value={newNote}
+              onChange={(e) => setNewNote(e.target.value)}
+              placeholder="Write your note here..."
+              className="w-full bg-white/20 border border-white/30 rounded-lg px-4 py-3 text-white placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent resize-none"
+              rows="4"
+              required
+            />
+            <div className="flex gap-3">
+              <button
+                type="submit"
+                disabled={loading || !newNote.trim()}
+                className="bg-gradient-to-r from-green-500 to-blue-500 hover:from-green-600 hover:to-blue-600 text-white font-semibold py-2 px-6 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {loading ? "Saving..." : editingNote ? "Update Note" : "Create Note"}
+              </button>
+              {editingNote && (
+                <button
+                  type="button"
+                  onClick={cancelEdit}
+                  className="bg-gray-500 hover:bg-gray-600 text-white font-semibold py-2 px-6 rounded-lg transition-colors duration-200"
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+          </form>
+        </div>
+
+        <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-6 shadow-2xl border border-white/20">
+          <h2 className="text-xl font-semibold text-white mb-6">Your Notes ({notes.length})</h2>
+          {loading && notes.length === 0 ? (
+            <div className="text-center py-8">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto mb-4"></div>
+              <p className="text-gray-300">Loading notes...</p>
+            </div>
+          ) : notes.length === 0 ? (
+            <div className="text-center py-8">
+              <div className="w-16 h-16 bg-gray-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                <span className="text-2xl">📝</span>
+              </div>
+              <p className="text-gray-300">No notes yet. Create your first note above!</p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {notes.map((note) => (
+                <div
+                  key={note.id}
+                  className="bg-white/5 border border-white/10 rounded-lg p-4 hover:bg-white/10 transition-colors duration-200"
+                >
+                  <div className="flex justify-between items-start gap-4">
+                    <div className="flex-1">
+                      <p className="text-white mb-2 whitespace-pre-wrap">{note.text}</p>
+                      <p className="text-xs text-gray-400">
+                        Created: {formatDate(note.createdAt)}
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => startEdit(note)}
+                        className="bg-blue-500 hover:bg-blue-600 text-white text-sm font-semibold py-1 px-3 rounded transition-colors duration-200"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => deleteNote(note.id)}
+                        className="bg-red-500 hover:bg-red-600 text-white text-sm font-semibold py-1 px-3 rounded transition-colors duration-200"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
