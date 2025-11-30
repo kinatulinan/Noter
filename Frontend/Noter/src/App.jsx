@@ -42,7 +42,6 @@ function App() {
       const laceWallet = window.cardano?.lace || window.cardano?.lacewallet;
       
       if (!laceWallet) {
-        console.log("Lace wallet not detected on page load");
         return;
       }
 
@@ -105,62 +104,47 @@ function App() {
     if (!walletAddress || !walletApi) return;
     
     try {
-      const utxos = await walletApi.getUtxos();
-      console.log("UTXOs:", utxos);
-    
-      let totalLovelace = BigInt(0);
-      if (utxos && utxos.length > 0) {
-        for (const utxo of utxos) {
-          if (utxo.amount) {
-            if (Array.isArray(utxo.amount)) {
-              const adaAmount = utxo.amount.find(amt => 
-                (typeof amt === 'object' && (amt.unit === 'lovelace' || 'lovelace' in amt))
-              );
-              if (adaAmount) {
-                const lovelace = typeof adaAmount === 'object' && 'lovelace' in adaAmount 
-                  ? BigInt(adaAmount.lovelace) 
-                  : BigInt(adaAmount.quantity || adaAmount);
-                totalLovelace += lovelace;
-              }
-            } else if (typeof utxo.amount === 'object' && 'lovelace' in utxo.amount) {
-              totalLovelace += BigInt(utxo.amount.lovelace);
-            } else if (typeof utxo.amount === 'string' || typeof utxo.amount === 'number') {
-              totalLovelace += BigInt(utxo.amount);
-            }
-          }
-        }
+      if (!walletApi.getBalance) {
+        setWalletBalance(0);
+        return;
       }
+
+      const balanceCbor = await walletApi.getBalance();
       
-      const adaBalance = Number(totalLovelace) / 1000000;
+      if (!balanceCbor) {
+        setWalletBalance(0);
+        return;
+      }
+
+      let cborBytes;
+      if (balanceCbor instanceof Uint8Array) {
+        cborBytes = balanceCbor;
+      } else if (typeof balanceCbor === 'string') {
+        const cborHex = balanceCbor.startsWith('0x') ? balanceCbor.slice(2) : balanceCbor;
+        cborBytes = Uint8Array.from(
+          cborHex.match(/.{1,2}/g).map(byte => parseInt(byte, 16))
+        );
+      } else {
+        setWalletBalance(0);
+        return;
+      }
+
+      const value = CardanoWasm.Value.from_bytes(cborBytes);
+      const coin = value.coin();
+      const lovelace = BigInt(coin.to_str());
+      const adaBalance = Number(lovelace) / 1000000;
+      
       setWalletBalance(adaBalance);
     } catch (error) {
       console.error("Error loading wallet balance:", error);
-      if (walletApi.getBalance) {
-        try {
-          const balance = await walletApi.getBalance();
-          if (balance) {
-            const adaBalance = typeof balance === 'string' ? BigInt(balance) : BigInt(balance);
-            setWalletBalance(Number(adaBalance) / 1000000);
-          }
-        } catch (err) {
-          console.error("Error getting balance:", err);
-          setWalletBalance(0);
-        }
-      } else {
-        setWalletBalance(0);
-      }
+      setWalletBalance(0);
     }
   };
 
   const openWalletModal = async () => {
-    console.log("Connect wallet clicked");
-    console.log("window.cardano:", window.cardano);
-    console.log("window.cardano?.lace:", window.cardano?.lace);
-    
     const laceWallet = window.cardano?.lace || window.cardano?.lacewallet;
     
     if (!laceWallet) {
-      console.error("Lace wallet not found. Available wallets:", Object.keys(window.cardano || {}));
       alert("Lace wallet is not installed. Please install Lace to use this app.");
       return;
     }
@@ -168,18 +152,13 @@ function App() {
     try {
       setLoadingAddresses(true);
       setShowWalletModal(true);
-      console.log("Enabling wallet...");
       const walletApi = await laceWallet.enable();
       setWalletApi(walletApi);
-      console.log("Wallet API enabled:", walletApi);
-      console.log("Available API methods:", Object.keys(walletApi));
       
       const allAddresses = [];
       
       try {
         const usedAddresses = await walletApi.getUsedAddresses();
-        console.log("Used addresses (count):", usedAddresses?.length);
-        console.log("Used addresses (raw):", usedAddresses);
         if (usedAddresses && usedAddresses.length > 0) {
           allAddresses.push(...usedAddresses);
         }
@@ -189,8 +168,6 @@ function App() {
       
       try {
         const unusedAddresses = await walletApi.getUnusedAddresses();
-        console.log("Unused addresses (count):", unusedAddresses?.length);
-        console.log("Unused addresses (raw):", unusedAddresses);
         if (unusedAddresses && unusedAddresses.length > 0) {
           allAddresses.push(...unusedAddresses);
         }
@@ -200,15 +177,12 @@ function App() {
       
       try {
         const changeAddress = await walletApi.getChangeAddress();
-        console.log("Change address:", changeAddress);
         if (changeAddress) {
           allAddresses.push(changeAddress);
         }
       } catch (err) {
         console.warn("Error getting change address:", err);
       }
-      
-      console.log("Total addresses collected (before deduplication):", allAddresses.length);
       
       const addressMap = new Map();
       allAddresses.forEach(addr => {
@@ -221,8 +195,6 @@ function App() {
               if (!addressMap.has(bech32Addr)) {
                 addressMap.set(bech32Addr, { hex: addrStr, bech32: bech32Addr });
               }
-            } else if (bech32Addr.startsWith('stake1') || bech32Addr.startsWith('stake_test1')) {
-              console.log("Skipping stake address:", bech32Addr);
             }
           } catch (err) {
             console.warn("Failed to convert address to bech32:", err);
@@ -236,7 +208,6 @@ function App() {
       });
       
       const uniqueAddresses = Array.from(addressMap.values());
-      console.log("All unique addresses (bech32):", uniqueAddresses.map(a => a.bech32));
       
       setAvailableAddresses(uniqueAddresses);
       
@@ -257,8 +228,6 @@ function App() {
   const selectWalletAddress = (addressObj) => {
     const addressToStore = addressObj.hex || addressObj.bech32;
     const addressToDisplay = addressObj.bech32 || addressObj.hex;
-    console.log("Selected wallet address (hex):", addressToStore);
-    console.log("Selected wallet address (bech32):", addressToDisplay);
     setWalletAddress({ hex: addressToStore, bech32: addressToDisplay });
     setIsConnected(true);
     localStorage.setItem(WALLET_STORAGE_KEY, addressToStore);
@@ -276,23 +245,101 @@ function App() {
       return;
     }
 
-    const amountLovelace = Math.floor(parseFloat(sendAmount) * 1000000);
-    if (isNaN(amountLovelace) || amountLovelace <= 0) {
+    const amountAda = parseFloat(sendAmount);
+    if (isNaN(amountAda) || amountAda <= 0) {
       alert("Please enter a valid amount");
       return;
     }
 
+    setSending(true);
+
     try {
-      setSending(true);
+      const recipientAddress = CardanoWasm.Address.from_bech32(sendAddress.trim());
+      if (CardanoWasm.ByronAddress.from_address(recipientAddress)) {
+        throw new Error("Sending to legacy Byron addresses is not supported.");
+      }
+
+      const changeAddrHex = await walletApi.getChangeAddress();
+      const changeAddr = CardanoWasm.Address.from_bytes(
+        Uint8Array.from(changeAddrHex.match(/.{1,2}/g).map(byte => parseInt(byte, 16)))
+      );
+       if (CardanoWasm.ByronAddress.from_address(changeAddr)) {
+        throw new Error("Your wallet's change address is a legacy Byron address, which is not supported.");
+      }
+
+      const utxosHex = await walletApi.getUtxos();
+      if (!utxosHex || utxosHex.length === 0) {
+        throw new Error("No UTXOs found in wallet.");
+      }
+
+      const utxoList = CardanoWasm.TransactionUnspentOutputs.new();
+      for (const utxoHex of utxosHex) {
+        const utxo = CardanoWasm.TransactionUnspentOutput.from_bytes(
+          Uint8Array.from(utxoHex.match(/.{1,2}/g).map(byte => parseInt(byte, 16)))
+        );
+        if (!CardanoWasm.ByronAddress.from_address(utxo.output().address())) {
+          utxoList.add(utxo);
+        } else {
+          console.warn("Skipping legacy Byron UTXO");
+        }
+      }
+
+      if (utxoList.len() === 0) {
+        throw new Error("No compatible (Shelley-era) UTXOs available for transaction.");
+      }
+
+      const txBuilderConfig = CardanoWasm.TransactionBuilderConfigBuilder.new()
+        .fee_algo(CardanoWasm.LinearFee.new(
+          CardanoWasm.BigNum.from_str("44"),
+          CardanoWasm.BigNum.from_str("155381")
+        ))
+        .coins_per_utxo_byte(CardanoWasm.BigNum.from_str("4310"))
+        .pool_deposit(CardanoWasm.BigNum.from_str("500000000"))
+        .key_deposit(CardanoWasm.BigNum.from_str("2000000"))
+        .max_value_size(5000)
+        .max_tx_size(16384)
+        .build();
+        
+      const txBuilder = CardanoWasm.TransactionBuilder.new(txBuilderConfig);
+
+      const output = CardanoWasm.TransactionOutput.new(
+        recipientAddress,
+        CardanoWasm.Value.new(CardanoWasm.BigNum.from_str(Math.floor(amountAda * 1_000_000).toString()))
+      );
+      txBuilder.add_output(output);
+
+      txBuilder.add_inputs_from(utxoList, CardanoWasm.CoinSelectionStrategyCIP2.RandomImprove);
+      txBuilder.add_change_if_needed(changeAddr);
+
+      const txBody = txBuilder.build();
       
-      alert("Send functionality requires full transaction building. Please use your Lace wallet directly for sending transactions.");
+      const unsignedTx = CardanoWasm.Transaction.new(txBody, CardanoWasm.TransactionWitnessSet.new());
+      const txHex = Array.from(unsignedTx.to_bytes(), byte => byte.toString(16).padStart(2, '0')).join('');
+
+      const witnessSetHex = await walletApi.signTx(txHex, true);
+      const witnessSet = CardanoWasm.TransactionWitnessSet.from_bytes(
+        Uint8Array.from(witnessSetHex.match(/.{1,2}/g).map(byte => parseInt(byte, 16)))
+      );
       
+      const signedTx = CardanoWasm.Transaction.new(txBody, witnessSet);
+      const signedTxHex = Array.from(signedTx.to_bytes(), byte => byte.toString(16).padStart(2, '0')).join('');
+
+      const txHash = await walletApi.submitTx(signedTxHex);
+      if (!txHash) {
+        throw new Error("Transaction submission failed.");
+      }
+
       setSendAddress("");
       setSendAmount("");
       setShowSendModal(false);
+      await loadWalletBalance();
+      
+      alert(`Transaction sent successfully! Hash: ${txHash}`);
+
     } catch (error) {
-      console.error("Error sending transaction:", error);
-      alert(`Failed to send transaction: ${error.message || error}`);
+      const errorMsg = error.message || error.toString() || "Unknown error";
+      console.error("Transaction Error:", error);
+      alert(`Failed to send transaction: ${errorMsg}`);
     } finally {
       setSending(false);
     }
@@ -481,7 +528,7 @@ function App() {
           </div>
         </div>
 
-        {/* Wallet Selection Modal */}
+
         {showWalletModal && (
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
             <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-6 shadow-2xl border border-white/20 max-w-md w-full">
@@ -593,7 +640,7 @@ function App() {
           </div>
         </div>
 
-        {/* Transactions Section */}
+
         <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-6 mb-8 shadow-2xl border border-white/20">
           <h2 className="text-xl font-semibold text-white mb-4">Wallet</h2>
           <div className="flex flex-col md:flex-row items-center gap-6 mb-4">
@@ -612,7 +659,7 @@ function App() {
           </div>
         </div>
 
-        {/* Send Modal */}
+
         {showSendModal && (
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
             <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-6 shadow-2xl border border-white/20 max-w-md w-full">
